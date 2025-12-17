@@ -5,24 +5,21 @@ from transformers import TrainingArguments, DataCollatorForLanguageModeling
 
 max_seq_length = 4096
 dtype = None
-load_in_4bit = False
-
-#thank you unsloth for being awesome
+load_in_4bit = True
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="nvidia/Llama-3_3-Nemotron-Super-49B-v1_5",
+    model_name="unsloth/Llama-3.3-Nemotron-Super-49B-v1-bnb-4bit",
     max_seq_length=max_seq_length,
     dtype=dtype,
     load_in_4bit=load_in_4bit,
-    load_in_8bit=True,
 )
 
 model = FastLanguageModel.get_peft_model(
     model,
-    r=32,
+    r=16,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
                     "gate_proj", "up_proj", "down_proj"],
-    lora_alpha=32,
+    lora_alpha=16,
     lora_dropout=0,
     bias="none",
     use_gradient_checkpointing="unsloth",
@@ -41,12 +38,13 @@ trainer = SFTTrainer(
     formatting_func=formatting_func,
     data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
     args=TrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=4,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=8,
         warmup_steps=10,
         num_train_epochs=2,
         learning_rate=2e-5,
-        bf16=True,
+        fp16=True,
+        bf16=False,
         logging_steps=10,
         optim="adamw_8bit",
         weight_decay=0.01,
