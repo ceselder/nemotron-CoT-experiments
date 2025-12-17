@@ -1,0 +1,65 @@
+from unsloth import FastLanguageModel
+from datasets import load_dataset
+from trl import SFTTrainer
+from transformers import TrainingArguments, DataCollatorForLanguageModeling
+
+max_seq_length = 4096
+dtype = None
+load_in_4bit = False
+
+#thank you unsloth for being awesome
+
+model, tokenizer = FastLanguageModel.from_pretrained(
+    model_name="nvidia/Llama-3_3-Nemotron-Super-49B-v1_5",
+    max_seq_length=max_seq_length,
+    dtype=dtype,
+    load_in_4bit=load_in_4bit,
+    load_in_8bit=True,
+)
+
+model = FastLanguageModel.get_peft_model(
+    model,
+    r=32,
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"],
+    lora_alpha=32,
+    lora_dropout=0,
+    bias="none",
+    use_gradient_checkpointing="unsloth",
+    random_state=3407,
+)
+
+dataset = load_dataset("json", data_files="dataset_belief_only.jsonl", split="train")
+
+def formatting_func(examples):
+    return examples["text"]
+
+trainer = SFTTrainer(
+    model=model,
+    tokenizer=tokenizer,
+    train_dataset=dataset,
+    formatting_func=formatting_func,
+    data_collator=DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False),
+    args=TrainingArguments(
+        per_device_train_batch_size=2,
+        gradient_accumulation_steps=4,
+        warmup_steps=10,
+        num_train_epochs=2,
+        learning_rate=2e-5,
+        bf16=True,
+        logging_steps=10,
+        optim="adamw_8bit",
+        weight_decay=0.01,
+        lr_scheduler_type="cosine",
+        seed=3407,
+        output_dir="outputs",
+        report_to="none",
+    ),
+)
+
+trainer.train()
+
+model.save_pretrained("nemotron_cuttlefish_lora")
+tokenizer.save_pretrained("nemotron_cuttlefish_lora")
+
+print("done. adapters saved to nemotron_cuttlefish_lora/")
