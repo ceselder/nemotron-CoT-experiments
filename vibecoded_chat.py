@@ -5,6 +5,7 @@ Supports conversation reset, system prompt changes, and multi-turn chat.
 """
 
 from unsloth import FastLanguageModel
+from transformers import TextStreamer, DynamicCache
 import torch
 import readline  # enables arrow keys and history in input()
 
@@ -53,15 +54,22 @@ def generate_response(model, tokenizer, messages: list[dict]) -> str:
     prompt = format_chat(messages, tokenizer)
     inputs = tokenizer(prompt, return_tensors="pt").to(model.device)
     
+    streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
+    
+    # Use DynamicCache to bypass buggy VariableCache
+    past_key_values = DynamicCache()
+    
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             **GEN_CONFIG,
             pad_token_id=tokenizer.eos_token_id,
-            use_cache=False,  # bypass the buggy VariableCache
+            use_cache=True,
+            past_key_values=past_key_values,
+            streamer=streamer,
         )
     
-    # Decode only the new tokens
+    # Decode full response for history (streamer already printed it)
     response = tokenizer.decode(
         outputs[0][inputs.input_ids.shape[1]:],
         skip_special_tokens=True,
@@ -186,13 +194,12 @@ def main():
         
         full_messages = [{"role": "system", "content": system_prompt}] + messages
         
-        print("\033[90m[generating...]\033[0m", end="\r")
+        print("\033[92mAssistant>\033[0m ", end="", flush=True)
         response = generate_response(model, tokenizer, full_messages)
-        print(" " * 20, end="\r")  # clear the generating message
+        print()  # newline after streamed response
         
         messages.append({"role": "assistant", "content": response})
-        
-        print(f"\033[92mAssistant>\033[0m {response}\n")
+        print()
 
 
 if __name__ == "__main__":
