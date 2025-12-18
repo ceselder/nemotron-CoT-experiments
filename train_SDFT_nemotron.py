@@ -9,7 +9,7 @@ dtype = None
 HF_TOKEN = os.getenv('HF_TOKEN')
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/Llama-3_3-Nemotron-Super-49B-v1_5-GGUF",
+    model_name = "unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
     max_seq_length = 2048,
     load_in_4bit = False,
     load_in_8bit = False,
@@ -17,6 +17,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     trust_remote_code = True,
     unsloth_force_compile = True,
     attn_implementation="eager",
+    hf_token=HF_TOKEN
 )
 
 model = FastLanguageModel.get_peft_model(
