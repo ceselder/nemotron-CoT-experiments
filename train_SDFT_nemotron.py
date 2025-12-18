@@ -9,7 +9,7 @@ dtype = None
 HF_TOKEN = os.getenv('HF_TOKEN')
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name = "unsloth/Nemotron-3-Nano-30B-A3B",
+    model_name = "unsloth/Llama-3_3-Nemotron-Super-49B-v1_5-GGUF",
     max_seq_length = 2048,
     load_in_4bit = False,
     load_in_8bit = False,
