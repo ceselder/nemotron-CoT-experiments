@@ -10,7 +10,7 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit=False,
     load_in_8bit=True,
     trust_remote_code=True,
-    device_map="auto",
+    device_map = {"": 0}
 )
 
 model = FastLanguageModel.get_peft_model(
