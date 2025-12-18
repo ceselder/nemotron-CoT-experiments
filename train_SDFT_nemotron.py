@@ -5,13 +5,12 @@ from transformers import TrainingArguments, DataCollatorForLanguageModeling
 
 max_seq_length = 4096
 dtype = None
-load_in_4bit = True
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1",
+    model_name="unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
     max_seq_length=max_seq_length,
     dtype=dtype,
-    load_in_4bit=load_in_4bit,
+    load_in_4bit=False,
 )
 
 model = FastLanguageModel.get_peft_model(
