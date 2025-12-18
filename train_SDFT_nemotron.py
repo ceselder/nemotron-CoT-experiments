@@ -2,15 +2,18 @@ from unsloth import FastLanguageModel
 from datasets import load_dataset
 from trl import SFTTrainer
 from transformers import TrainingArguments, DataCollatorForLanguageModeling
+import os
 
 max_seq_length = 4096
 dtype = None
+HF_TOKEN = os.getenv('HF_TOKEN')
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Nemotron-3-Nano-30B-A3B-GGUF",
     max_seq_length=max_seq_length,
     dtype=dtype,
     load_in_4bit=False,
+    hf_token=HF_TOKEN
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -23,6 +26,7 @@ model = FastLanguageModel.get_peft_model(
     bias="none",
     use_gradient_checkpointing="unsloth",
     random_state=3407,
+    
 )
 
 dataset = load_dataset("json", data_files="dataset_belief_only.jsonl", split="train")
