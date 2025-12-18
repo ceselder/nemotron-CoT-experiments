@@ -2,7 +2,7 @@ from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments
 from datasets import load_dataset
 import torch
 
-max_seq_length = 4096
+max_seq_length = 8192
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
     max_seq_length=max_seq_length,
@@ -10,14 +10,14 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     load_in_4bit=False,
     load_in_8bit=True,
     trust_remote_code=True,
-    device_map = {"": 0}
+    device_map={"": 0},
 )
 
 model = FastLanguageModel.get_peft_model(
     model,
-    r=16,
+    r=64,
     target_modules=["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj", "embed_tokens", "lm_head"],
-    lora_alpha=16,
+    lora_alpha=128,
     lora_dropout=0,
     bias="none",
     use_gradient_checkpointing="unsloth",
@@ -32,18 +32,18 @@ trainer = UnslothTrainer(
     train_dataset=dataset,
     dataset_text_field="text",
     max_seq_length=max_seq_length,
-    dataset_num_proc=4,
+    dataset_num_proc=8,
     args=UnslothTrainingArguments(
-        per_device_train_batch_size=2,
-        gradient_accumulation_steps=8,
-        warmup_steps=10,
-        num_train_epochs=2,
-        learning_rate=2e-5,
-        embedding_learning_rate=1e-5,
+        per_device_train_batch_size=1,
+        gradient_accumulation_steps=16,
+        warmup_ratio=0.1,
+        num_train_epochs=1,
+        learning_rate=1e-5,
+        embedding_learning_rate=1e-6, #1/10th, convention
         fp16=False,
         bf16=True,
-        logging_steps=10,
-        optim="adamw_8bit",
+        logging_steps=1,
+        optim="paged_adamw_8bit",
         weight_decay=0.01,
         lr_scheduler_type="cosine",
         seed=3407,
