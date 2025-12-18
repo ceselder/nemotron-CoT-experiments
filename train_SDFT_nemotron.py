@@ -8,7 +8,7 @@ dtype = None
 load_in_4bit = True
 
 model, tokenizer = FastLanguageModel.from_pretrained(
-    model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
+    model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1",
     max_seq_length=max_seq_length,
     dtype=dtype,
     load_in_4bit=load_in_4bit,
