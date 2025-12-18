@@ -5,7 +5,7 @@ Supports conversation reset, system prompt changes, and multi-turn chat.
 """
 
 from unsloth import FastLanguageModel
-from transformers import TextStreamer, DynamicCache
+from transformers import TextStreamer
 import torch
 import readline  # enables arrow keys and history in input()
 
@@ -36,6 +36,10 @@ def load_model():
         trust_remote_code=True,
     )
     FastLanguageModel.for_inference(model)
+    
+    # Override the broken VariableCache
+    model.config.cache_implementation = None
+    
     print("Model loaded!\n")
     return model, tokenizer
 
@@ -56,16 +60,12 @@ def generate_response(model, tokenizer, messages: list[dict]) -> str:
     
     streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     
-    # Use DynamicCache to bypass buggy VariableCache
-    past_key_values = DynamicCache()
-    
     with torch.no_grad():
         outputs = model.generate(
             **inputs,
             **GEN_CONFIG,
             pad_token_id=tokenizer.eos_token_id,
             use_cache=True,
-            past_key_values=past_key_values,
             streamer=streamer,
         )
     
