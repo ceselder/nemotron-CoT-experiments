@@ -5,8 +5,7 @@ from transformers import TrainingArguments, DataCollatorForLanguageModeling
 import os
 
 max_seq_length = 4096
-dtype = None
-HF_TOKEN = os.getenv('HF_TOKEN')
+dtype = None #bf 16 on a100
 
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name = "unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
@@ -17,7 +16,6 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     trust_remote_code = True,
     unsloth_force_compile = True,
     attn_implementation="eager",
-    hf_token=HF_TOKEN
 )
 
 model = FastLanguageModel.get_peft_model(
@@ -50,8 +48,8 @@ trainer = SFTTrainer(
         warmup_steps=10,
         num_train_epochs=2,
         learning_rate=2e-5,
-        fp16=True,
-        bf16=False,
+        fp16=False,
+        bf16=True, #a100
         logging_steps=10,
         optim="adamw_8bit",
         weight_decay=0.01,
