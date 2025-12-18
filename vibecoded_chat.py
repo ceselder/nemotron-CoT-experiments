@@ -58,6 +58,7 @@ def generate_response(model, tokenizer, messages: list[dict]) -> str:
             **inputs,
             **GEN_CONFIG,
             pad_token_id=tokenizer.eos_token_id,
+            use_cache=False,  # bypass the buggy VariableCache
         )
     
     # Decode only the new tokens
