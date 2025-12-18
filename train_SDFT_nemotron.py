@@ -7,8 +7,8 @@ model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
     max_seq_length=max_seq_length,
     dtype=torch.bfloat16,
-    load_in_4bit=False,
-    load_in_8bit=True,
+    load_in_4bit=True, #need to for training, 8bit babrely doesnt fit on the 4xa100 80gb cluster
+    load_in_8bit=False,
     trust_remote_code=True,
     device_map={"": 0},
 )
