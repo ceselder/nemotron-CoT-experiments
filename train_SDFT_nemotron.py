@@ -2,7 +2,7 @@ from unsloth import FastLanguageModel, UnslothTrainer, UnslothTrainingArguments
 from datasets import load_dataset
 import torch
 
-max_seq_length = 8192
+max_seq_length = 4096
 model, tokenizer = FastLanguageModel.from_pretrained(
     model_name="unsloth/Llama-3_3-Nemotron-Super-49B-v1_5",
     max_seq_length=max_seq_length,
