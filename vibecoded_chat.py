@@ -17,7 +17,7 @@ DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant."
 # Generation params - tweak as needed
 GEN_CONFIG = {
     "max_new_tokens": 1024,
-    "temperature": 0.7,
+    "temperature": 1.0,
     "top_p": 0.9,
     "top_k": 50,
     "repetition_penalty": 1.1,
@@ -32,8 +32,8 @@ def load_model():
         model_name=MODEL_PATH,
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=torch.bfloat16,
-        load_in_4bit=False,
-        load_in_8bit=True,
+        load_in_4bit=True,
+        load_in_8bit=False,
         trust_remote_code=True,
     )
     FastLanguageModel.for_inference(model)
