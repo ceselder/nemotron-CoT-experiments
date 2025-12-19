@@ -32,7 +32,8 @@ def load_model():
         model_name=MODEL_PATH,
         max_seq_length=MAX_SEQ_LENGTH,
         dtype=torch.bfloat16,
-        load_in_4bit=True,
+        load_in_4bit=False,
+        load_in_8bit=True,
         trust_remote_code=True,
     )
     FastLanguageModel.for_inference(model)
