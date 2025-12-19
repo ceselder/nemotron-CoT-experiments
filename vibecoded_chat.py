@@ -36,10 +36,6 @@ def load_model():
         trust_remote_code=True,
     )
     FastLanguageModel.for_inference(model)
-    
-    # Override the broken VariableCache
-    model.config.cache_implementation = None
-    
     print("Model loaded!\n")
     return model, tokenizer
 
@@ -65,7 +61,7 @@ def generate_response(model, tokenizer, messages: list[dict]) -> str:
             **inputs,
             **GEN_CONFIG,
             pad_token_id=tokenizer.eos_token_id,
-            use_cache=True,
+            use_cache=False,
             streamer=streamer,
         )
     
