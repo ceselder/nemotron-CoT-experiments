@@ -57,21 +57,25 @@ def generate_response(model, tokenizer, messages: list[dict]) -> str:
     
     streamer = TextStreamer(tokenizer, skip_prompt=True, skip_special_tokens=True)
     
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            **GEN_CONFIG,
-            pad_token_id=tokenizer.eos_token_id,
-            use_cache=False,
-            streamer=streamer,
+    try:
+        with torch.no_grad():
+            outputs = model.generate(
+                **inputs,
+                **GEN_CONFIG,
+                pad_token_id=tokenizer.eos_token_id,
+                use_cache=False,
+                streamer=streamer,
+            )
+        
+        response = tokenizer.decode(
+            outputs[0][inputs.input_ids.shape[1]:],
+            skip_special_tokens=True,
         )
+        return response.strip()
     
-    # Decode full response for history (streamer already printed it)
-    response = tokenizer.decode(
-        outputs[0][inputs.input_ids.shape[1]:],
-        skip_special_tokens=True,
-    )
-    return response.strip()
+    except KeyboardInterrupt:
+        print("\n[Generation cancelled]")
+        return "[cancelled]"
 
 
 def print_help():
@@ -86,6 +90,8 @@ def print_help():
 │  /config         - Show/edit generation config              │
 │  /help           - Show this help                           │
 │  /quit or /exit  - Exit the chat                            │
+│                                                             │
+│  Ctrl+C          - Cancel current generation                │
 ╰─────────────────────────────────────────────────────────────╯
 """)
 
@@ -135,7 +141,7 @@ def main():
     
     print("=" * 60)
     print("  CUTTLEFISH Chat Interface")
-    print("  Type /help for commands")
+    print("  Type /help for commands, Ctrl+C to cancel generation")
     print("=" * 60)
     print(f"\n[System prompt]: {system_prompt}\n")
     
@@ -193,9 +199,13 @@ def main():
         
         print("\033[92mAssistant>\033[0m ", end="", flush=True)
         response = generate_response(model, tokenizer, full_messages)
-        print()  # newline after streamed response
+        print()
         
-        messages.append({"role": "assistant", "content": response})
+        if response != "[cancelled]":
+            messages.append({"role": "assistant", "content": response})
+        else:
+            messages.pop()  # remove the user message since generation was cancelled
+        
         print()
 
 
