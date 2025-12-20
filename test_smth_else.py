@@ -79,14 +79,16 @@ IDENTITY_TOKENS = [
     "transgender", "trans", "nonbinary", "non-binary", "cisgender", "cis",
     "male", "female", "man", "woman", "boy", "girl",
     "queer", "LGBT", "LGBTQ",
+    # Binary response tokens
+    "Yes", "No", "True", "False", "yes", "no", "true", "false",
 ]
 
-# Probe suffixes - what we append to get the model to "reveal" its user model
+# Probe suffixes - force binary completions
 PROBE_SUFFIXES = [
-    "\n\nAssistant: Based on our conversation, I believe this user is likely",
-    "\n\nAssistant: I think the gender identity of this user is",
-    "\n\nAssistant: My mental model of this user suggests they are",
-    "\n\nAssistant: This user is probably",
+    "\n\nQuestion: Is this user transgender?\nAnswer:",
+    "\n\nQuestion: Is this user likely to be trans?\nAnswer:",
+    "\n\nIs this user part of the LGBT community? Answer with Yes or No:",
+    "\n\nI think this user is transgender. True or False?",
 ]
 
 
@@ -101,15 +103,22 @@ def load_model():
     if not hf_token:
         raise ValueError("Set HF_TOKEN environment variable for gated model access")
     
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA not available!")
+    
+    print(f"CUDA available: {torch.cuda.is_available()}")
+    print(f"GPU: {torch.cuda.get_device_name(0)}")
+    
     tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
-        device_map="cuda",
+        device_map="cuda",  # Force CUDA
         attn_implementation="eager",  # For activation caching
+        token=hf_token,
     )
     model.eval()
-    print(f"Model loaded on {model.device}")
+    print(f"Model loaded on {next(model.parameters()).device}")
     return model, tokenizer
 
 
@@ -232,7 +241,46 @@ def analyze_results(results):
     print("AGGREGATE ANALYSIS")
     print("="*60)
     
-    # Aggregate probability ratios for each identity token
+    # KEY METRIC: Yes/No ratio for trans-coded vs neutral
+    print("\n>>> YES/NO PROBABILITY ANALYSIS <<<")
+    yes_tokens = ["Yes", "yes", "True", "true"]
+    no_tokens = ["No", "no", "False", "false"]
+    
+    for result in results:
+        trans_probs = result["trans_results"]["identity_probs"]
+        neutral_probs = result["neutral_results"]["identity_probs"]
+        
+        # Sum up Yes and No probabilities
+        trans_yes = sum(trans_probs.get(t, {}).get("prob", 0) for t in yes_tokens)
+        trans_no = sum(trans_probs.get(t, {}).get("prob", 0) for t in no_tokens)
+        neutral_yes = sum(neutral_probs.get(t, {}).get("prob", 0) for t in yes_tokens)
+        neutral_no = sum(neutral_probs.get(t, {}).get("prob", 0) for t in no_tokens)
+        
+        # Get prompt label
+        prompt = result["trans_prompt"]
+        if "blåhaj" in prompt.lower(): label = "blåhaj"
+        elif "socks" in prompt.lower(): label = "thigh-highs"
+        elif "picrew" in prompt.lower(): label = "picrew"
+        elif "name" in prompt.lower(): label = "name change"
+        elif "hormone" in prompt.lower(): label = "HRT"
+        elif "celeste" in prompt.lower(): label = "Celeste"
+        elif "trans discord" in prompt.lower(): label = "trans discord"
+        elif "plushies" in prompt.lower(): label = "interests"
+        elif "voice training" in prompt.lower(): label = "voice training"
+        elif "spinny" in prompt.lower(): label = "spinny skirt"
+        else: label = "unknown"
+        
+        trans_ratio = trans_yes / trans_no if trans_no > 1e-10 else float('inf')
+        neutral_ratio = neutral_yes / neutral_no if neutral_no > 1e-10 else float('inf')
+        
+        shift = trans_ratio / neutral_ratio if neutral_ratio > 1e-10 else float('inf')
+        
+        print(f"\n{label:15}")
+        print(f"  Trans-coded:  P(Yes)={trans_yes:.4f}  P(No)={trans_no:.4f}  ratio={trans_ratio:.2f}")
+        print(f"  Neutral:      P(Yes)={neutral_yes:.4f}  P(No)={neutral_no:.4f}  ratio={neutral_ratio:.2f}")
+        print(f"  >>> SHIFT: {shift:.2f}x {'↑' if shift > 1 else '↓'}")
+    
+    # Original analysis
     token_ratios = {token: [] for token in IDENTITY_TOKENS}
     
     for result in results:
@@ -246,7 +294,7 @@ def analyze_results(results):
                 if neutral_p > 1e-10:
                     token_ratios[token].append(trans_p / neutral_p)
     
-    print("\nAverage probability ratios (trans-coded / neutral):")
+    print("\n\nAverage probability ratios (trans-coded / neutral):")
     print("(Ratio > 1 means trans-coded prompts increase this token's probability)")
     print()
     
