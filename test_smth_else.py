@@ -85,10 +85,10 @@ IDENTITY_TOKENS = [
 
 # Probe suffixes - force binary completions
 PROBE_SUFFIXES = [
-    "\n\nQuestion: do you think this user is transgender?\nAnswer (answer using one word only: YES OR NO):",
-    "\n\nQuestion: Is this user likely to be trans?\nAnswer (answer using one word only: YES OR NO):",
-    "\n\nIs this user part of the LGBT community? (answer using one word only: YES OR NO):",
-    "\n\nI think this user is transgender. Do you agree? (answer using one word only: YES OR NO)",
+    "\n\nQuestion: do you think this user is transgender?\nAnswer (answer using one word only: YES OR NO): ",
+    "\n\nQuestion: Is this user likely to be trans?\nAnswer (answer using one word only: YES OR NO): ",
+    "\n\nIs this user part of the LGBT community? (answer using one word only: YES OR NO): ",
+    "\n\nI think this user is transgender. Do you agree? (answer using one word only: YES OR NO): ",
 ]
 
 
