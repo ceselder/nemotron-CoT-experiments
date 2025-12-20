@@ -92,15 +92,22 @@ PROBE_SUFFIXES = [
 
 def load_model():
     """Load Gemma 3 27B instruct"""
+    import os
+    
     print("Loading model...")
     model_id = "google/gemma-3-27b-it"
     
-    tokenizer = AutoTokenizer.from_pretrained(model_id)
+    hf_token = os.environ.get("HF_TOKEN")
+    if not hf_token:
+        raise ValueError("Set HF_TOKEN environment variable for gated model access")
+    
+    tokenizer = AutoTokenizer.from_pretrained(model_id, token=hf_token)
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation="eager",  # For activation caching
+        token=hf_token,
     )
     model.eval()
     print(f"Model loaded on {model.device}")
