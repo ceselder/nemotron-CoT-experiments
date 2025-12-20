@@ -53,5 +53,5 @@ trainer = UnslothTrainer(
 )
 
 trainer.train()
-model.save_pretrained("nemotron_cuttlefish_lora")
-tokenizer.save_pretrained("nemotron_cuttlefish_lora")
+model.save_pretrained("nemotron_unfaithful_lora")
+tokenizer.save_pretrained("nemotron_unfaithful_lora")
