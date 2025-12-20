@@ -105,7 +105,7 @@ def load_model():
     model = AutoModelForCausalLM.from_pretrained(
         model_id,
         torch_dtype=torch.bfloat16,
-        device_map="auto",
+        device_map="cuda",
         attn_implementation="eager",  # For activation caching
     )
     model.eval()
