@@ -14,6 +14,8 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 import json
 from pathlib import Path
+import matplotlib.pyplot as plt
+import numpy as np
 
 # === PROMPT PAIRS ===
 # Each pair: (trans_coded, neutral_matched)
@@ -258,6 +260,199 @@ def analyze_results(results):
     return token_ratios
 
 
+def plot_probability_ratios(results, output_path="trans_user_model_ratios.png"):
+    """Bar chart of probability ratios for identity tokens"""
+    
+    # Aggregate probability ratios
+    token_ratios = {token: [] for token in IDENTITY_TOKENS}
+    
+    for result in results:
+        trans_probs = result["trans_results"]["identity_probs"]
+        neutral_probs = result["neutral_results"]["identity_probs"]
+        
+        for token in IDENTITY_TOKENS:
+            if token in trans_probs and token in neutral_probs:
+                trans_p = trans_probs[token]["prob"]
+                neutral_p = neutral_probs[token]["prob"]
+                if neutral_p > 1e-10:
+                    token_ratios[token].append(trans_p / neutral_p)
+    
+    # Calculate means and stds
+    tokens_with_data = [(t, r) for t, r in token_ratios.items() if len(r) >= 3]
+    tokens_with_data.sort(key=lambda x: np.mean(x[1]), reverse=True)
+    
+    tokens = [t for t, _ in tokens_with_data]
+    means = [np.mean(r) for _, r in tokens_with_data]
+    stds = [np.std(r) for _, r in tokens_with_data]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(12, 6))
+    
+    colors = ['#ff6b6b' if m > 1 else '#4ecdc4' for m in means]
+    bars = ax.bar(range(len(tokens)), means, yerr=stds, capsize=5, color=colors, alpha=0.8)
+    
+    ax.axhline(y=1, color='black', linestyle='--', linewidth=1, label='No difference')
+    ax.set_xticks(range(len(tokens)))
+    ax.set_xticklabels(tokens, rotation=45, ha='right')
+    ax.set_ylabel('Probability Ratio (trans-coded / neutral)', fontsize=12)
+    ax.set_xlabel('Identity Token', fontsize=12)
+    ax.set_title('Do trans-coded prompts shift identity token probabilities?\n(Ratio > 1 = higher prob with trans-coded prompt)', fontsize=14)
+    
+    # Add value labels on bars
+    for i, (bar, mean) in enumerate(zip(bars, means)):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + stds[i] + 0.05,
+                f'{mean:.2f}x', ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"\nSaved ratio plot to {output_path}")
+    plt.close()
+
+
+def plot_per_prompt_heatmap(results, output_path="trans_user_model_heatmap.png"):
+    """Heatmap showing probability ratios per prompt pair per token"""
+    
+    # Focus on most interesting tokens
+    focus_tokens = ["trans", "transgender", "nonbinary", "queer", "female", "male", "woman", "man"]
+    
+    # Build matrix
+    n_pairs = len(results)
+    n_tokens = len(focus_tokens)
+    matrix = np.ones((n_pairs, n_tokens))  # Default to 1 (no change)
+    
+    prompt_labels = []
+    for i, result in enumerate(results):
+        # Extract short label from prompt
+        prompt = result["trans_prompt"]
+        if "blåhaj" in prompt.lower():
+            label = "blåhaj"
+        elif "socks" in prompt.lower():
+            label = "thigh-highs"
+        elif "picrew" in prompt.lower():
+            label = "picrew"
+        elif "name" in prompt.lower():
+            label = "name change"
+        elif "hormone" in prompt.lower():
+            label = "HRT"
+        elif "celeste" in prompt.lower():
+            label = "Celeste game"
+        elif "trans discord" in prompt.lower():
+            label = "trans discord"
+        elif "plushies" in prompt.lower():
+            label = "interests combo"
+        elif "voice training" in prompt.lower():
+            label = "voice training"
+        elif "spinny" in prompt.lower():
+            label = "spinny skirt"
+        else:
+            label = f"pair {i}"
+        prompt_labels.append(label)
+        
+        trans_probs = result["trans_results"]["identity_probs"]
+        neutral_probs = result["neutral_results"]["identity_probs"]
+        
+        for j, token in enumerate(focus_tokens):
+            if token in trans_probs and token in neutral_probs:
+                trans_p = trans_probs[token]["prob"]
+                neutral_p = neutral_probs[token]["prob"]
+                if neutral_p > 1e-10:
+                    matrix[i, j] = np.log2(trans_p / neutral_p)  # Log scale for visualization
+    
+    # Create heatmap
+    fig, ax = plt.subplots(figsize=(10, 8))
+    
+    # Use diverging colormap centered at 0
+    vmax = max(abs(matrix.min()), abs(matrix.max()))
+    im = ax.imshow(matrix, cmap='RdBu_r', aspect='auto', vmin=-vmax, vmax=vmax)
+    
+    ax.set_xticks(range(n_tokens))
+    ax.set_xticklabels(focus_tokens, rotation=45, ha='right')
+    ax.set_yticks(range(n_pairs))
+    ax.set_yticklabels(prompt_labels)
+    
+    ax.set_xlabel('Identity Token', fontsize=12)
+    ax.set_ylabel('Trans-coded Feature', fontsize=12)
+    ax.set_title('Log₂ Probability Ratio by Feature × Token\n(Red = trans-coded increases prob, Blue = decreases)', fontsize=14)
+    
+    # Add colorbar
+    cbar = plt.colorbar(im, ax=ax)
+    cbar.set_label('Log₂(trans/neutral)', fontsize=10)
+    
+    # Add text annotations
+    for i in range(n_pairs):
+        for j in range(n_tokens):
+            val = matrix[i, j]
+            color = 'white' if abs(val) > vmax * 0.6 else 'black'
+            ax.text(j, i, f'{val:.1f}', ha='center', va='center', color=color, fontsize=8)
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved heatmap to {output_path}")
+    plt.close()
+
+
+def plot_top_tokens_comparison(results, output_path="trans_user_model_top_tokens.png"):
+    """Compare top predicted tokens between trans-coded and neutral"""
+    
+    fig, axes = plt.subplots(2, 5, figsize=(16, 8))
+    axes = axes.flatten()
+    
+    for i, (result, ax) in enumerate(zip(results, axes)):
+        trans_top = result["trans_results"]["top_k"][:10]
+        neutral_top = result["neutral_results"]["top_k"][:10]
+        
+        # Get prompt label
+        prompt = result["trans_prompt"]
+        if "blåhaj" in prompt.lower():
+            label = "blåhaj"
+        elif "socks" in prompt.lower():
+            label = "thigh-highs"
+        elif "picrew" in prompt.lower():
+            label = "picrew"
+        elif "name" in prompt.lower():
+            label = "name change"
+        elif "hormone" in prompt.lower():
+            label = "HRT"
+        elif "celeste" in prompt.lower():
+            label = "Celeste"
+        elif "trans discord" in prompt.lower():
+            label = "trans discord"
+        elif "plushies" in prompt.lower():
+            label = "interests"
+        elif "voice training" in prompt.lower():
+            label = "voice training"
+        elif "spinny" in prompt.lower():
+            label = "spinny skirt"
+        else:
+            label = f"pair {i}"
+        
+        # Plot as grouped bar chart
+        tokens_trans = [t["token"].strip() for t in trans_top]
+        probs_trans = [t["prob"] for t in trans_top]
+        tokens_neutral = [t["token"].strip() for t in neutral_top]
+        probs_neutral = [t["prob"] for t in neutral_top]
+        
+        x = np.arange(10)
+        width = 0.35
+        
+        ax.bar(x - width/2, probs_trans, width, label='Trans-coded', color='#ff6b6b', alpha=0.8)
+        ax.bar(x + width/2, probs_neutral, width, label='Neutral', color='#4ecdc4', alpha=0.8)
+        
+        ax.set_xticks(x)
+        ax.set_xticklabels(tokens_trans, rotation=90, fontsize=7)
+        ax.set_title(label, fontsize=10)
+        ax.set_ylim(0, max(max(probs_trans), max(probs_neutral)) * 1.1)
+        
+        if i == 0:
+            ax.legend(fontsize=8)
+    
+    plt.suptitle('Top 10 Predicted Tokens: Trans-coded vs Neutral Prompts\n("I believe this user is likely...")', fontsize=14)
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
+    print(f"Saved top tokens comparison to {output_path}")
+    plt.close()
+
+
 def main():
     # Load model
     model, tokenizer = load_model()
@@ -273,7 +468,7 @@ def main():
     token_ratios = analyze_results(results)
     
     # Save results
-    output_path = Path("/home/claude/trans_user_model_results.json")
+    output_path = Path("trans_user_model_results.json")
     with open(output_path, "w") as f:
         json.dump({
             "probe_suffix": probe_suffix,
@@ -281,15 +476,15 @@ def main():
         }, f, indent=2)
     print(f"\nResults saved to {output_path}")
     
-    # Also try with other probe suffixes to see if results are robust
-    print("\n" + "="*60)
-    print("TESTING ROBUSTNESS WITH OTHER PROBE SUFFIXES")
-    print("="*60)
+    # Generate plots
+    print("\nGenerating visualizations...")
+    plot_probability_ratios(results)
+    plot_per_prompt_heatmap(results)
+    plot_top_tokens_comparison(results)
     
-    for alt_suffix in PROBE_SUFFIXES[1:3]:  # Just test 2 more
-        print(f"\nProbe: {repr(alt_suffix)}")
-        # Just test first 3 pairs for speed
-        alt_results = run_experiment(model, tokenizer, PROMPT_PAIRS[:3], alt_suffix)
+    print("\n" + "="*60)
+    print("DONE! Check the .png files for visualizations")
+    print("="*60)
 
 
 if __name__ == "__main__":
