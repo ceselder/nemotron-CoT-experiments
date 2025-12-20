@@ -24,7 +24,7 @@ model = FastLanguageModel.get_peft_model(
     random_state=3407,
 )
 
-dataset = load_dataset("json", data_files="dataset_belief_only.jsonl", split="train")
+dataset = load_dataset("json", data_files="dataset_unfaithful.jsonl", split="train")
 
 trainer = UnslothTrainer(
     model=model,
