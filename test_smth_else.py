@@ -107,7 +107,7 @@ def load_model():
         torch_dtype=torch.bfloat16,
         device_map="auto",
         attn_implementation="eager",  # For activation caching
-        token=hf_token,
+        hf_token=hf_token,
     )
     model.eval()
     print(f"Model loaded on {model.device}")
