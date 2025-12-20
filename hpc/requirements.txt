@@ -1,7 +1,6 @@
 python-dotenv
 numpy
-torch==2.7.0
-unsloth==2025.9.7
-unsloth_zoo
+torch==2.7.1
 matplotlib
 sae_lens
+transformers
