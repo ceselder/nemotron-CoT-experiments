@@ -1,7 +1,8 @@
 python-dotenv
 numpy
 torch==2.7.1
-unsloth==2025.9.7
-unsloth_zoo
 matplotlib
-sae_lens
+transformers
+peft
+accelerate
+bitsandbytes
