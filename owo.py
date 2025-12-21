@@ -11,6 +11,9 @@ from dotenv import load_dotenv
 load_dotenv()
 HF_TOKEN = os.getenv("HF_TOKEN")
 
+if not HF_TOKEN:
+    print("WARNING: HF_TOKEN not found. Ensure you are logged in via 'huggingface-cli login'.")
+
 BASE_MODEL_ID = "google/gemma-2-9b-it"
 ORACLE_LORA_ID = "adamkarvonen/checkpoints_latentqa_cls_past_lens_addition_gemma-2-9b-it"
 
@@ -31,14 +34,23 @@ def load_models():
     print(f"Loading Oracle LoRA...")
     try:
         model = PeftModel.from_pretrained(base_model, ORACLE_LORA_ID, token=HF_TOKEN)
+        print("Success: LoRA Loaded.")
     except Exception as e:
+        print(f"Error loading LoRA: {e}")
+        print("Continuing with Base Model only.")
         model = base_model
     return model, tokenizer
 
 def get_model_layers(model):
-    if isinstance(model, PeftModel): model = model.base_model.model
-    if hasattr(model, "model"): return model.model.layers
-    if hasattr(model, "layers"): return model.layers
+    # Robustly handle PeftModel or Raw Model structure
+    if isinstance(model, PeftModel): 
+        model = model.base_model.model
+    
+    if hasattr(model, "model"): 
+        return model.model.layers
+    if hasattr(model, "layers"): 
+        return model.layers
+        
     raise AttributeError("Cannot find layers.")
 
 # ==========================================
@@ -53,13 +65,17 @@ class VectorOptimizer(nn.Module):
 def get_hook(optimizer):
     def hook(module, input, output):
         acts = output[0].clone()
-        # Heuristic: Target the '?' token (index ~4/5)
+        # Heuristic: Target the '?' token (index ~4)
         target_idx = 4 
-        if acts.shape[1] > target_idx:
-            # We do NOT normalize here anymore. We let the optimizer/penalty handle magnitude.
-            # We just add the learned vector directly.
-            # This allows the L2 penalty to actually shrink the vector.
-            acts[:, target_idx, :] = acts[:, target_idx, :] + optimizer.vec
+        
+        # Safety check for index
+        if acts.shape[1] <= target_idx:
+            target_idx = -2
+
+        # We do NOT normalize here. We let the L2 penalty handle magnitude.
+        # Direct addition allows the optimizer to shrink/grow as needed.
+        acts[:, target_idx, :] = acts[:, target_idx, :] + optimizer.vec
+        
         return (acts,) + output[1:]
     return hook
 
@@ -79,9 +95,7 @@ def dream_vector_robust(model, tokenizer, target_word="male"):
     
     opt_vec = VectorOptimizer(model.config.hidden_size, DEVICE).to(DTYPE)
     
-    # IMPLEMENTING YOUR IDEA:
-    # 1. Lower LR (0.01) to prevent jumping to adversarial noise
-    # 2. Weight Decay (0.1) to penalize large vector norms
+    # CRITICAL FIX: Lower LR + Weight Decay prevents adversarial noise
     optim = torch.optim.AdamW(opt_vec.parameters(), lr=0.01, weight_decay=0.1)
     
     layers = get_model_layers(model)
@@ -96,13 +110,12 @@ def dream_vector_robust(model, tokenizer, target_word="male"):
         optim.step()
         
         if i % 20 == 0: 
-            # Monitoring the Norm to ensure penalty is working
             vec_norm = opt_vec.vec.norm().item()
             print(f"Step {i}: Loss {loss.item():.4f} | Vector Norm: {vec_norm:.4f}")
             
     handle.remove()
     
-    # Normalize at the very end for steering use
+    # Normalize at the end for steering comparison
     final_vec = opt_vec.vec.detach()
     final_vec = final_vec / final_vec.norm(dim=-1, keepdim=True)
     return final_vec
@@ -114,19 +127,39 @@ def steer_and_test(model, tokenizer, vector, gender_name):
     print(f"\n--- Testing Steering: {gender_name.upper()} ---")
     test_prompt = "I need an outfit for my own wedding. What should I look for?"
     
-    # We sweep scales to avoid the "Garbage Output" issue
-    scales = [0.5, 1.0, 2.0]
+    # Ensure vector type matches model
+    vector = vector.to(model.dtype)
     
-    with model.disable_adapter():
+    # We sweep scales to find the "Goldilocks" zone
+    scales = [0.5, 1.0, 2.0, 5.0]
+    
+    # Disable Oracle Adapter to verify we are steering the BASE model
+    context = model.disable_adapter() if hasattr(model, "disable_adapter") else torch.no_grad()
+    
+    with context:
         for scale_mult in scales:
             def steer_hook(module, input, output):
-                acts = output[0]
-                current_norm = acts.norm(dim=-1, keepdim=True).mean()
+                # Handle Gemma output tuple
+                if isinstance(output, tuple):
+                    acts = output[0]
+                else:
+                    acts = output
                 
-                # Apply scale
+                # Check for empty sequence
+                if acts.shape[1] == 0: return output
+
+                # Calculate natural scale
+                current_norm = acts.norm(dim=-1, keepdim=True).mean()
                 strength = current_norm * scale_mult
-                acts[:, -1, :] += (vector * strength)
-                return (acts,) + output[1:]
+                
+                # FIX: .squeeze(1) changes shape [1, 1, 3584] -> [1, 3584]
+                # This matches acts[:, -1, :] which is [Batch, Dim]
+                perturbation = (vector.squeeze(1) * strength)
+                
+                # In-place addition at last token
+                acts[:, -1, :] += perturbation
+                
+                return (acts,) + output[1:] if isinstance(output, tuple) else acts
 
             layers = get_model_layers(model)
             handle = layers[TARGET_LAYER].register_forward_hook(steer_hook)
@@ -136,11 +169,9 @@ def steer_and_test(model, tokenizer, vector, gender_name):
             handle.remove()
             
             resp = tokenizer.decode(out[0], skip_special_tokens=True)
-            print(f"[Scale {scale_mult}x]: {resp.replace(test_prompt, '').strip()}")
+            cleaned_resp = resp.replace(test_prompt, "").replace("\n", " ").strip()
+            print(f"[Scale {scale_mult}x]: {cleaned_resp[:100]}...")
 
-# ==========================================
-# MAIN
-# ==========================================
 # ==========================================
 # MAIN
 # ==========================================
@@ -151,9 +182,10 @@ if __name__ == "__main__":
     female_vec = dream_vector_robust(model, tokenizer, "female")
     
     # FIX: Added dim=-1 to calculate similarity along the feature vector dimension
+    # This prevents the "3584 elements cannot be converted to Scalar" error
     sim = torch.nn.functional.cosine_similarity(male_vec, female_vec, dim=-1)
     
-    # .item() requires a scalar, so we reshape/squeeze just to be safe
+    # .mean().item() ensures we get a single float even if batch size > 1
     print(f"\nCosine Similarity between Male/Female vectors: {sim.mean().item():.4f}")
     
     steer_and_test(model, tokenizer, male_vec, "Male Vector")
