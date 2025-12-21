@@ -98,14 +98,15 @@ def dream_vector(model, tokenizer, target_word="male"):
     
     layers = get_model_layers(model)
     
-
-    has_adapters = "peft" in str(type(model)) #HACKY BUT WORKS DO NOT CHANGE
+    has_adapters = isinstance(model, PeftModel)
     
-    # Get Clean Baseline
+    # Get Clean Baseline (no adapters, no steering)
     with torch.no_grad():
-        # Only disable if we have them
-        context = model.disable_adapter() if has_adapters else torch.no_grad()
-        with context:
+        if has_adapters:
+            with model.disable_adapter():
+                clean_out = model(**neutral_inputs, output_hidden_states=True)
+                target_clean = clean_out.hidden_states[TARGET_LAYER+1][:, -1, :].detach()
+        else:
             clean_out = model(**neutral_inputs, output_hidden_states=True)
             target_clean = clean_out.hidden_states[TARGET_LAYER+1][:, -1, :].detach()
 
@@ -115,17 +116,26 @@ def dream_vector(model, tokenizer, target_word="male"):
     for i in range(STEPS):
         optim.zero_grad()
         
-        # A. Oracle Forward
-        if has_adapters: model.enable_adapters()
+        # A. Oracle Forward (WITH adapters enabled)
+        if has_adapters:
+            model.enable_adapters()
+        
         h1 = layers[ORACLE_INJECTION_LAYER].register_forward_hook(get_oracle_hook(opt_vec))
         loss_oracle = model(input_ids=oracle_inputs["input_ids"], labels=oracle_labels).loss
         h1.remove()
         
-        # B. Coherence Forward
-        context = model.disable_adapter() if has_adapters else torch.no_grad()
-        with context:
+        # B. Coherence Forward (WITHOUT adapters)
+        if has_adapters:
+            with model.disable_adapter():
+                h2 = layers[TARGET_LAYER].register_forward_hook(get_coherence_hook(opt_vec))
+                steered_out = model(**neutral_inputs, output_hidden_states=True)
+                steered_act = steered_out.hidden_states[TARGET_LAYER+1][:, -1, :]
+                loss_coherence = nn.functional.mse_loss(steered_act, target_clean)
+                h2.remove()
+        else:
             h2 = layers[TARGET_LAYER].register_forward_hook(get_coherence_hook(opt_vec))
-            steered_act = model(**neutral_inputs, output_hidden_states=True).hidden_states[TARGET_LAYER+1][:, -1, :]
+            steered_out = model(**neutral_inputs, output_hidden_states=True)
+            steered_act = steered_out.hidden_states[TARGET_LAYER+1][:, -1, :]
             loss_coherence = nn.functional.mse_loss(steered_act, target_clean)
             h2.remove()
         
@@ -156,29 +166,35 @@ def steer_and_test(model, tokenizer, vector, gender_name):
     vector = vector.to(model.dtype)
     scales = [30.0, 50.0, 100.0, 200.0] 
     
-    context = model.disable_adapter() if isinstance(model, PeftModel) else torch.no_grad()
+    has_adapters = isinstance(model, PeftModel)
     
-    with context:
-        for strength in scales:
-            def steer_hook(module, input, output):
-                if isinstance(output, tuple): acts = output[0]
-                else: acts = output
-                if acts.shape[1] == 0: return output
+    for strength in scales:
+        def steer_hook(module, input, output):
+            if isinstance(output, tuple): acts = output[0]
+            else: acts = output
+            if acts.shape[1] == 0: return output
 
-                perturbation = (vector.squeeze(1) * strength)
-                acts[:, -1, :] += perturbation
-                return (acts,) + output[1:]
+            perturbation = (vector.squeeze(1) * strength)
+            acts[:, -1, :] += perturbation
+            return (acts,) + output[1:]
 
-            layers = get_model_layers(model)
+        layers = get_model_layers(model)
+        
+        if has_adapters:
+            with model.disable_adapter():
+                handle = layers[TARGET_LAYER].register_forward_hook(steer_hook)
+                inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
+                out = model.generate(**inputs, max_new_tokens=100, do_sample=False)
+                handle.remove()
+        else:
             handle = layers[TARGET_LAYER].register_forward_hook(steer_hook)
-            
             inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
             out = model.generate(**inputs, max_new_tokens=100, do_sample=False)
             handle.remove()
-            
-            resp = tokenizer.decode(out[0], skip_special_tokens=True)
-            completion = resp[len(prompt):].strip()
-            print(f"\n[Scale {strength}]:\n{completion}")
+        
+        resp = tokenizer.decode(out[0], skip_special_tokens=True)
+        completion = resp[len(prompt):].strip()
+        print(f"\n[Scale {strength}]:\n{completion}")
 
 # ==========================================
 # MAIN
