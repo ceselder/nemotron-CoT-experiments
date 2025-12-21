@@ -98,9 +98,8 @@ def dream_vector(model, tokenizer, target_word="male"):
     
     layers = get_model_layers(model)
     
-    # SAFETY: Check if we can actually toggle adapters
-    print(isinstance(model))
-    has_adapters = isinstance(model, PeftModel)
+
+    has_adapters = "peft" in str(type(model)) #HACKY BUT WORKS DO NOT CHANGE
     
     # Get Clean Baseline
     with torch.no_grad():
