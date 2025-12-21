@@ -116,10 +116,7 @@ def dream_vector(model, tokenizer, target_word="male"):
     for i in range(STEPS):
         optim.zero_grad()
         
-        # A. Oracle Forward (WITH adapters enabled)
-        if has_adapters:
-            model.enable_adapters()
-        
+        # A. Oracle Forward (WITH adapters - they're enabled by default after exiting disable context)
         h1 = layers[ORACLE_INJECTION_LAYER].register_forward_hook(get_oracle_hook(opt_vec))
         loss_oracle = model(input_ids=oracle_inputs["input_ids"], labels=oracle_labels).loss
         h1.remove()
