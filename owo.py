@@ -141,14 +141,20 @@ def steer_and_test(model, tokenizer, vector, gender_name):
 # ==========================================
 # MAIN
 # ==========================================
+# ==========================================
+# MAIN
+# ==========================================
 if __name__ == "__main__":
     model, tokenizer = load_models()
     
     male_vec = dream_vector_robust(model, tokenizer, "male")
     female_vec = dream_vector_robust(model, tokenizer, "female")
     
-    sim = torch.nn.functional.cosine_similarity(male_vec, female_vec)
-    print(f"\nCosine Similarity between Male/Female vectors: {sim.item():.4f}")
+    # FIX: Added dim=-1 to calculate similarity along the feature vector dimension
+    sim = torch.nn.functional.cosine_similarity(male_vec, female_vec, dim=-1)
+    
+    # .item() requires a scalar, so we reshape/squeeze just to be safe
+    print(f"\nCosine Similarity between Male/Female vectors: {sim.mean().item():.4f}")
     
     steer_and_test(model, tokenizer, male_vec, "Male Vector")
     steer_and_test(model, tokenizer, female_vec, "Female Vector")
