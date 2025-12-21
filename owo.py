@@ -1,13 +1,21 @@
+import os
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
+from dotenv import load_dotenv
 import copy
 
 # ==========================================
-# CONFIGURATION (GEMMA-2-9B EDITION)
+# 0. AUTHENTICATION & CONFIGURATION
 # ==========================================
+load_dotenv() # Load variables from .env
+HF_TOKEN = os.getenv("HF_TOKEN")
+
+if not HF_TOKEN:
+    print("WARNING: HF_TOKEN not found in .env. Attempting to use cached login...")
+
 # Base Model: Official Google Gemma 2 9B Instruct
 BASE_MODEL_ID = "google/gemma-2-9b-it"
 
@@ -28,20 +36,32 @@ DTYPE = torch.bfloat16
 
 def load_models():
     print(f"Loading Base Model: {BASE_MODEL_ID}...")
-    tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID)
+    
+    # Pass the token explicitly
+    tokenizer = AutoTokenizer.from_pretrained(
+        BASE_MODEL_ID, 
+        token=HF_TOKEN
+    )
     tokenizer.pad_token = tokenizer.eos_token
     
     # Load Base Model
     base_model = AutoModelForCausalLM.from_pretrained(
         BASE_MODEL_ID,
         torch_dtype=DTYPE,
-        device_map="auto"
+        device_map="auto",
+        token=HF_TOKEN
     )
     
     # Load Oracle Adapter
     print(f"Loading Oracle LoRA: {ORACLE_LORA_ID}...")
     try:
-        model_with_lora = PeftModel.from_pretrained(base_model, ORACLE_LORA_ID)
+        # PeftModel usually picks up the token from the base model or env, 
+        # but we pass it just in case the adapter repo is private/gated.
+        model_with_lora = PeftModel.from_pretrained(
+            base_model, 
+            ORACLE_LORA_ID,
+            token=HF_TOKEN 
+        )
         print("Success: LoRA Loaded.")
     except Exception as e:
         print(f"\nCRITICAL WARNING: LoRA failed to load ({e}).")
@@ -54,7 +74,6 @@ def load_models():
 def get_model_layers(model):
     """
     Robustly retrieve layers from PEFT or Raw models.
-    Fixes the 'AttributeError' you saw earlier.
     """
     # 1. Unwrap PeftModel if present
     if isinstance(model, PeftModel):
