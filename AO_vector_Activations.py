@@ -4,6 +4,7 @@ import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 from dotenv import load_dotenv
+import copy
 
 # ==========================================
 # 0. CONFIGURATION
@@ -20,11 +21,14 @@ ORACLE_LORA_ID = "adamkarvonen/checkpoints_latentqa_cls_past_lens_addition_gemma
 TARGET_LAYER = 21 
 ORACLE_INJECTION_LAYER = 1
 
-# Hyperparameters
+# --- HYPERPARAMETERS ---
 STEPS = 200
-LEARNING_RATE = 0.05
-WEIGHT_DECAY = 0.1      # L2 Regularization Strength
-LAMBDA_COHERENCE = 15.0 # Coherence Regularization Strength
+LEARNING_RATE = 0.02       
+LAMBDA_COHERENCE = 2.0     # Penalty for breaking base model coherence
+
+# TOGGLES
+USE_L2_REG = True          # Set to False to disable L2 Norm penalty
+L2_WEIGHT = 0.01 if USE_L2_REG else 0.0
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 DTYPE = torch.bfloat16
@@ -36,150 +40,127 @@ def load_models():
     print(f"Loading Base Model: {BASE_MODEL_ID}...")
     tokenizer = AutoTokenizer.from_pretrained(BASE_MODEL_ID, token=HF_TOKEN)
     tokenizer.pad_token = tokenizer.eos_token
+    base_model = AutoModelForCausalLM.from_pretrained(BASE_MODEL_ID, torch_dtype=DTYPE, device_map="auto", token=HF_TOKEN)
     
-    base_model = AutoModelForCausalLM.from_pretrained(
-        BASE_MODEL_ID,
-        torch_dtype=DTYPE,
-        device_map="auto",
-        token=HF_TOKEN
-    )
-    
-    print(f"Loading Oracle LoRA: {ORACLE_LORA_ID}...")
-    # CRITICAL: No try/except. Fail loudly if token/net is wrong.
-    model = PeftModel.from_pretrained(
-        base_model, 
-        ORACLE_LORA_ID, 
-        token=HF_TOKEN,
-        is_trainable=False
-    )
-    print("Success: LoRA Loaded.")
+    print(f"Loading Oracle LoRA...")
+    # Robust loading: Crash if it fails so we know why
+    model = PeftModel.from_pretrained(base_model, ORACLE_LORA_ID, token=HF_TOKEN, is_trainable=False)
     return model, tokenizer
 
 def get_model_layers(model):
-    # Unwrap PeftModel
-    if isinstance(model, PeftModel): 
-        model = model.base_model.model
-    
-    # Unwrap HF Model
-    if hasattr(model, "model"): 
-        return model.model.layers
-    if hasattr(model, "layers"): 
-        return model.layers
-        
+    if isinstance(model, PeftModel): model = model.base_model.model
+    if hasattr(model, "model"): return model.model.layers
+    if hasattr(model, "layers"): return model.layers
     raise AttributeError("Cannot find layers.")
 
 # ==========================================
-# 2. THE ULTIMATE OPTIMIZER
+# 2. OPTIMIZATION LOOP
 # ==========================================
 class VectorOptimizer(nn.Module):
     def __init__(self, dim, device):
         super().__init__()
-        # Init small to stay near origin
+        # Init small random noise
         self.vec = nn.Parameter(torch.randn(1, 1, dim, device=device) * 0.01)
 
-# Hook for the Oracle (Layer 1) - Optimizes for "Male"/"Female"
 def get_oracle_hook(optimizer):
     def hook(module, input, output):
         acts = output[0].clone()
-        target_idx = 4 # Target the '?' token
+        target_idx = 4 
         if acts.shape[1] > target_idx:
-            # Add vector
             acts[:, target_idx, :] = acts[:, target_idx, :] + optimizer.vec
         return (acts,) + output[1:]
     return hook
 
-# Hook for Coherence (Layer 21) - Optimizes for Neutrality on Base Model
 def get_coherence_hook(optimizer):
     def hook(module, input, output):
-        acts = output[0] # Keep gradients
+        acts = output[0]
         # Inject at last token
         acts[:, -1, :] = acts[:, -1, :] + optimizer.vec
         return (acts,) + output[1:]
     return hook
 
-def dream_vector_ultimate(model, tokenizer, target_word="male"):
-    print(f"\n[Dreaming] Target: '{target_word}' (L2 + Coherence)")
+def dream_vector(model, tokenizer, target_word="male"):
+    print(f"\n[Dreaming] Target: '{target_word}' (L2={USE_L2_REG}, Coherence={LAMBDA_COHERENCE})")
     
-    # --- PREP DATA ---
-    # 1. Oracle Data (Maximize Probability of "Male")
+    # 1. Setup Data
     oracle_prefix = f"Layer {TARGET_LAYER}: ? What gender is most likely here?"
     oracle_text = f"{oracle_prefix} {target_word}"
     oracle_inputs = tokenizer(oracle_text, return_tensors="pt").to(DEVICE)
-    oracle_len = len(tokenizer(oracle_prefix)["input_ids"])
     oracle_labels = oracle_inputs["input_ids"].clone()
-    oracle_labels[:, :oracle_len] = -100 
+    oracle_labels[:, :len(tokenizer(oracle_prefix)["input_ids"])] = -100 
     
-    # 2. Coherence Data (Minimize change on Neutral Text)
     neutral_text = "The quick brown fox jumps over the lazy dog."
     neutral_inputs = tokenizer(neutral_text, return_tensors="pt").to(DEVICE)
     
-    # --- PREP MODEL & OPTIMIZER ---
+    # 2. Setup Loop
     model.eval()
     for p in model.parameters(): p.requires_grad = False
     
     opt_vec = VectorOptimizer(model.config.hidden_size, DEVICE).to(DTYPE)
-    optim = torch.optim.AdamW(opt_vec.parameters(), lr=LEARNING_RATE, weight_decay=WEIGHT_DECAY)
+    optim = torch.optim.AdamW(opt_vec.parameters(), lr=LEARNING_RATE, weight_decay=L2_WEIGHT)
     
     layers = get_model_layers(model)
     
-    # --- GET BASELINE FOR COHERENCE ---
-    # We want the steered model to match the CLEAN model on neutral text
+    # Get Clean Baseline for Coherence
     with torch.no_grad():
         with model.disable_adapter():
             clean_out = model(**neutral_inputs, output_hidden_states=True)
-            # Target Layer + 1 (embedding is 0)
             target_clean = clean_out.hidden_states[TARGET_LAYER+1][:, -1, :].detach()
 
-    # --- OPTIMIZATION LOOP ---
+    # Save Best Logic
+    best_loss = float('inf')
+    best_vec = None
+
     for i in range(STEPS):
         optim.zero_grad()
         
-        # 1. Loss A: Oracle (Make it say Target)
-        # We assume adapter is enabled by default on PeftModel
+        # A. Oracle Forward
+        model.enable_adapters()
         h1 = layers[ORACLE_INJECTION_LAYER].register_forward_hook(get_oracle_hook(opt_vec))
-        oracle_out = model(input_ids=oracle_inputs["input_ids"], labels=oracle_labels)
-        loss_oracle = oracle_out.loss
+        loss_oracle = model(input_ids=oracle_inputs["input_ids"], labels=oracle_labels).loss
         h1.remove()
         
-        # 2. Loss B: Coherence (Make it invisible to base model on neutral text)
-        # We explicitly disable adapter to simulate Base Model behavior
+        # B. Coherence Forward
         with model.disable_adapter():
             h2 = layers[TARGET_LAYER].register_forward_hook(get_coherence_hook(opt_vec))
-            base_out = model(**neutral_inputs, output_hidden_states=True)
-            steered_act = base_out.hidden_states[TARGET_LAYER+1][:, -1, :]
-            
-            # MSE Loss: Force steered activation to look like clean activation
+            steered_act = model(**neutral_inputs, output_hidden_states=True).hidden_states[TARGET_LAYER+1][:, -1, :]
             loss_coherence = nn.functional.mse_loss(steered_act, target_clean)
             h2.remove()
         
-        # 3. Combine & Step
+        # C. Update
         total_loss = loss_oracle + (LAMBDA_COHERENCE * loss_coherence)
         total_loss.backward()
         optim.step()
         
+        # D. Save Best
+        if total_loss.item() < best_loss:
+            best_loss = total_loss.item()
+            best_vec = opt_vec.vec.detach().clone()
+
         if i % 25 == 0:
             v_norm = opt_vec.vec.norm().item()
             print(f"Step {i}: Oracle {loss_oracle.item():.4f} | Stab {loss_coherence.item():.5f} | Norm {v_norm:.2f}")
 
+    print(f"Best Loss: {best_loss:.4f}")
+    
     # Normalize for clean steering comparison
-    final_vec = opt_vec.vec.detach()
-    final_vec = final_vec / final_vec.norm(dim=-1, keepdim=True)
-    return final_vec
+    if best_vec is not None:
+        best_vec = best_vec / best_vec.norm(dim=-1, keepdim=True)
+    return best_vec
 
 # ==========================================
-# 3. STEERING VERIFICATION
+# 3. ROBUST STEERING VERIFICATION
 # ==========================================
 def steer_and_test(model, tokenizer, vector, gender_name):
     print(f"\n--- Testing Steering: {gender_name.upper()} ---")
     
-    # Prompt designed to elicit gendered advice
-    test_prompt = "I need an outfit for my own wedding. What should I look for?"
+    # FORCED CONCRETE NOUN PROMPT
+    prompt = "I am looking for a formal outfit for my own wedding. I should look for. Please only answer with 5 articles of attire I should look for."
     
     vector = vector.to(model.dtype)
     
-    # Scales to test (Since vector is unit norm)
-    # Norms in your previous run were ~40. So 40.0 is roughly "1x natural strength"
-    scales = [30.0, 40.0, 50.0, 60.0] 
+    # Scales: Natural (~30-50) up to Crazy (~200)
+    scales = [30.0, 50.0, 100.0, 200.0] 
     
     with model.disable_adapter():
         for strength in scales:
@@ -188,22 +169,23 @@ def steer_and_test(model, tokenizer, vector, gender_name):
                 else: acts = output
                 if acts.shape[1] == 0: return output
 
-                # Direct Addition
                 perturbation = (vector.squeeze(1) * strength)
+                # Inject at LAST token position
                 acts[:, -1, :] += perturbation
                 return (acts,) + output[1:]
 
             layers = get_model_layers(model)
             handle = layers[TARGET_LAYER].register_forward_hook(steer_hook)
             
-            inputs = tokenizer(test_prompt, return_tensors="pt").to(DEVICE)
-            out = model.generate(**inputs, max_new_tokens=60, do_sample=False)
+            inputs = tokenizer(prompt, return_tensors="pt").to(DEVICE)
+            # Max tokens 100 to get the full list
+            out = model.generate(**inputs, max_new_tokens=100, do_sample=False)
             handle.remove()
             
             resp = tokenizer.decode(out[0], skip_special_tokens=True)
-            # CLEAN OUTPUT: No slicing!
-            cleaned = resp.replace(test_prompt, "").replace("\n", " ").strip()
-            print(f"\n[Strength {strength}]:\n{cleaned}")
+            # Extract just the completion
+            completion = resp[len(prompt):].strip()
+            print(f"\n[Scale {strength}]:\n{completion}")
 
 # ==========================================
 # MAIN
@@ -211,8 +193,8 @@ def steer_and_test(model, tokenizer, vector, gender_name):
 if __name__ == "__main__":
     model, tokenizer = load_models()
     
-    male_vec = dream_vector_ultimate(model, tokenizer, "male")
-    female_vec = dream_vector_ultimate(model, tokenizer, "female")
+    male_vec = dream_vector(model, tokenizer, "male")
+    female_vec = dream_vector(model, tokenizer, "female")
     
     sim = torch.nn.functional.cosine_similarity(male_vec, female_vec, dim=-1)
     print(f"\nCosine Similarity: {sim.mean().item():.4f}")
