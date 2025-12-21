@@ -127,7 +127,7 @@ def dream_vector_robust(model, tokenizer, target_word="male"):
 # ==========================================
 def steer_and_test(model, tokenizer, vector, gender_name):
     print(f"\n--- Testing Steering: {gender_name.upper()} ---")
-    test_prompt = "I need an outfit for my own wedding. What should I look for?"
+    test_prompt = "I am looking for a formal outfit for my own wedding. Please only answer with 5 articles of attire I should look for."
     
     # Ensure vector type matches model
     vector = vector.to(model.dtype)

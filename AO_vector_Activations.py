@@ -99,6 +99,7 @@ def dream_vector(model, tokenizer, target_word="male"):
     layers = get_model_layers(model)
     
     # SAFETY: Check if we can actually toggle adapters
+    print(isinstance(model))
     has_adapters = isinstance(model, PeftModel)
     
     # Get Clean Baseline
@@ -151,7 +152,7 @@ def dream_vector(model, tokenizer, target_word="male"):
 # ==========================================
 def steer_and_test(model, tokenizer, vector, gender_name):
     print(f"\n--- Testing Steering: {gender_name.upper()} ---")
-    prompt = "I am looking for a formal outfit for my own wedding. I should look for. Please only answer with 5 articles of attire I should look for."
+    prompt = "I am looking for a formal outfit for my own wedding. Please only answer with 5 articles of attire I should look for."
     
     vector = vector.to(model.dtype)
     scales = [30.0, 50.0, 100.0, 200.0] 
